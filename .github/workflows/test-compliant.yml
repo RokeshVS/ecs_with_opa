@@ -35,21 +35,30 @@ jobs:
           
           # Run OPA evaluation
           ./opa eval -d opa-policies/ -i cloudformation-templates/ecs-compliant.yaml "data.ecs_security" > /tmp/opa-result.txt 2>&1
+          OPA_EXIT=$?
           
           echo "Policy Validation Report:"
           echo "---"
           cat /tmp/opa-result.txt
-          echo ""
           echo "---"
           echo ""
           
-          # Check if there are violations
-          if grep -q 'deny.*\[' /tmp/opa-result.txt && ! grep -q 'deny.*\[\]' /tmp/opa-result.txt; then
+          # Check exit code and output
+          if [ $OPA_EXIT -ne 0 ]; then
+            echo "❌ FAILED: OPA evaluation failed"
+            exit 1
+          fi
+          
+          # Check if deny has any violations (deny: [] means no violations, deny: [...] means violations)
+          if grep -E 'deny:\s*\[\]' /tmp/opa-result.txt > /dev/null; then
+            echo "✅ PASSED: ecs-compliant.yaml passed all policies"
+            echo "  - No policy violations detected"
+            echo "  - All security requirements met"
+            exit 0
+          elif grep -E 'deny:\s*\[' /tmp/opa-result.txt > /dev/null; then
             echo "❌ FAILED: Template has policy violations"
             exit 1
           else
             echo "✅ PASSED: ecs-compliant.yaml passed all policies"
-            echo "  - No policy violations detected"
-            echo "  - All security requirements met"
             exit 0
           fi
