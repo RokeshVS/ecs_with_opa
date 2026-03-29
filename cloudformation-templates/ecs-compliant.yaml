@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: 'Compliant ECS Fargate Service with Security Best Practices'
+Description: 'Compliant ECS Fargate Service with Security Best Practices '
 
 Parameters:
   Environment:
