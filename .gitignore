@@ -1,0 +1,53 @@
+# OPA and Build Artifacts
+opa
+opa.exe
+.opa/
+
+# Test Results
+test-results.json
+opa-report.md
+opa-violations.txt
+
+# Converted CloudFormation Files
+test-data/cf-json/
+*.converted.json
+
+# OPA Evaluation Results
+opa-results/
+*.result.json
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+venv/
+env/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+*.tmp
+*.bak
+.temp/
+
+# GitHub Actions
+.act/
+
+# CloudFormation
+*.parameters.json
+cfn-lint-report.json
+
+# Git
+.git/

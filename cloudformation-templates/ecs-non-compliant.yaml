@@ -1,0 +1,146 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Non-Compliant ECS Service - For Testing OPA Policies'
+
+Resources:
+  # VPC
+  ServiceVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+
+  # Subnet
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref ServiceVPC
+      CidrBlock: 10.0.1.0/24
+
+  # VIOLATION 4: Security Group with allow-all ingress rule
+  NonCompliantSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Non-compliant SG with allow-all rule
+      VpcId: !Ref ServiceVPC
+      SecurityGroupIngress:
+        # VIOLATION: Allow all traffic from anywhere
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: non-compliant-sg
+
+  # Missing required tags - VIOLATION 7
+  TaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+
+  # VIOLATION 13: TaskRole with wildcard permissions
+  TaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: OverslyPermissivePolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: '*'
+                Resource: '*'
+
+  # ECS Cluster
+  NonCompliantCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: non-compliant-cluster
+
+  # CloudWatch Log Group
+  TaskLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /ecs/non-compliant-service
+
+  # VIOLATION 1: Public IP enabled for Fargate
+  # VIOLATION 2: Host network mode
+  # VIOLATION 3: SSH port exposed
+  # VIOLATION 5: No CPU/Memory limits
+  # VIOLATION 6: Docker Hub image (untrusted registry)
+  # VIOLATION 9: Wrong image naming convention
+  # VIOLATION 10: Privileged mode enabled
+  # VIOLATION 11: Running as root
+  # VIOLATION 12: No ExecutionRoleArn
+  NonCompliantTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: non-compliant-service
+      NetworkMode: host  # VIOLATION 2: Host network mode
+      RequiresCompatibilities:
+        - FARGATE
+      Cpu: '256'  # VIOLATION 5: Too low
+      Memory: '512'  # VIOLATION 5: Too low
+      # VIOLATION 12: Missing ExecutionRoleArn
+      TaskRoleArn: !GetAtt TaskRole.Arn
+      ContainerDefinitions:
+        - Name: webapp
+          Image: nginx:latest  # VIOLATION 6: Docker Hub, not ECR. VIOLATION 9: Wrong naming
+          PortMappings:
+            - ContainerPort: 22  # VIOLATION 3: SSH port exposed
+              Protocol: tcp
+            - ContainerPort: 3306  # VIOLATION 3: MySQL port exposed
+              Protocol: tcp
+            - ContainerPort: 8080
+              Protocol: tcp
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref TaskLogGroup
+              awslogs-region: !Ref AWS::Region
+          Privileged: true  # VIOLATION 10: Privileged mode
+          User: '0'  # VIOLATION 11: Running as root
+          Environment:
+            - Name: APP_ENV
+              Value: prod
+
+  # VIOLATION 1: AssignPublicIp set to ENABLED
+  NonCompliantService:
+    Type: AWS::ECS::Service
+    Properties:
+      ServiceName: non-compliant-service
+      Cluster: !Ref NonCompliantCluster
+      TaskDefinition: !Ref NonCompliantTaskDefinition
+      DesiredCount: 1
+      LaunchType: FARGATE
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED  # VIOLATION 1: Public IP enabled
+          Subnets:
+            - !Ref PublicSubnet
+          SecurityGroups:
+            - !Ref NonCompliantSecurityGroup
+
+  # VIOLATION 7: Missing tags (Environment, Application, CostCenter)
+  # VIOLATION 8: Large instance type
+  NonCompliantEC2Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: ami-0c55b159cbfafe1f0
+      InstanceType: r7g.16xlarge  # VIOLATION 8: Very large instance
+      NetworkInterface:
+        DeviceIndex: 0
+        SubnetId: !Ref PublicSubnet
+        AssociatePublicIpAddress: true

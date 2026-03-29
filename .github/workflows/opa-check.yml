@@ -1,0 +1,48 @@
+name: OPA Policy Check
+
+on:
+  pull_request:
+    paths:
+      - 'cloudformation-templates/**'
+      - 'opa-policies/**'
+  push:
+    branches:
+      - main
+    paths:
+      - 'cloudformation-templates/**'
+
+jobs:
+  opa-check:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Install OPA
+        run: |
+          curl -L -o opa https://openpolicyagent.org/downloads/latest/opa_linux_amd64
+          chmod +x opa
+          ./opa version
+      
+      - name: Validate with OPA
+        run: |
+          failed=0
+          for file in cloudformation-templates/*.yaml; do
+            if [ -f "$file" ]; then
+              filename=$(basename "$file")
+              echo ""
+              echo "=================================================="
+              echo "Checking: $filename"
+              echo "=================================================="
+              
+              if ./opa eval -d opa-policies/ -i "$file" data; then
+                echo "✅ PASSED: $filename"
+              else
+                echo "❌ FAILED: $filename"
+                failed=1
+              fi
+            fi
+          done
+          
+          exit $failed

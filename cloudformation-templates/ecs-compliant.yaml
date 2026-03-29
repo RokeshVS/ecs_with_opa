@@ -1,0 +1,332 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Compliant ECS Fargate Service with Security Best Practices'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: production
+    AllowedValues:
+      - production
+      - staging
+      - development
+
+Resources:
+  # VPC for the service
+  ServiceVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: ecs-service-vpc
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Private Subnet
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref ServiceVPC
+      CidrBlock: 10.0.1.0/24
+      AvailabilityZone: !Select [0, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: private-subnet-1
+
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref ServiceVPC
+      CidrBlock: 10.0.2.0/24
+      AvailabilityZone: !Select [1, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: private-subnet-2
+
+  # Security Group - No allow-all rules
+  ECSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for ECS tasks - restrictive ingress
+      VpcId: !Ref ServiceVPC
+      SecurityGroupIngress:
+        # Only allow traffic from ALB on port 8080
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          SourceSecurityGroupId: !Ref ALBSecurityGroup
+        # Allow internal service-to-service communication
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          CidrIp: 10.0.0.0/16
+      SecurityGroupEgress:
+        # Allow outbound HTTPS only
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+        # Allow DNS
+        - IpProtocol: udp
+          FromPort: 53
+          ToPort: 53
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: ecs-task-sg
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Application
+          Value: web-service
+        - Key: CostCenter
+          Value: engineering
+
+  # ALB Security Group
+  ALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for Application Load Balancer
+      VpcId: !Ref ServiceVPC
+      SecurityGroupIngress:
+        # Allow HTTPS from clients
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: alb-sg
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Application
+          Value: web-service
+        - Key: CostCenter
+          Value: engineering
+
+  # IAM Role for Task Execution (pulling images, logging)
+  ECSTaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+
+  # IAM Role for Task (application permissions)
+  ECSTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        # Least-privilege policy for application
+        - PolicyName: ApplicationPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:ListBucket
+                Resource:
+                  - !Sub 'arn:aws:s3:::app-bucket/*'
+                  - !Sub 'arn:aws:s3:::app-bucket'
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+
+  # ECS Cluster
+  ECSCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: compliant-ecs-cluster
+      ClusterSettings:
+        - Name: containerInsights
+          Value: enabled
+      Tags:
+        - Key: Name
+          Value: compliant-cluster
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Application
+          Value: web-service
+        - Key: CostCenter
+          Value: engineering
+
+  # CloudWatch Log Group
+  TaskLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /ecs/compliant-service
+      RetentionInDays: 30
+
+  # ECS Task Definition with strict security controls
+  WebServiceTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: compliant-web-service
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      Cpu: '512'
+      Memory: '1024'
+      ExecutionRoleArn: !GetAtt ECSTaskExecutionRole.Arn
+      TaskRoleArn: !GetAtt ECSTaskRole.Arn
+      ContainerDefinitions:
+        - Name: web-app
+          Image: 123456789012.dkr.ecr.us-east-1.amazonaws.com/api-abc123:v1.0
+          Cpu: 256
+          Memory: 512
+          PortMappings:
+            - ContainerPort: 8080
+              HostPort: 8080
+              Protocol: tcp
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref TaskLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: ecs
+          # Security Controls
+          Privileged: false
+          # Non-root user
+          User: '1000'
+          ReadonlyRootFilesystem: false
+          Environment:
+            - Name: LOG_LEVEL
+              Value: info
+            - Name: ENVIRONMENT
+              Value: !Ref Environment
+      Tags:
+        - Key: Name
+          Value: web-service-task
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Application
+          Value: web-service
+        - Key: CostCenter
+          Value: engineering
+
+  # ECS Service with private IP assignment
+  WebService:
+    Type: AWS::ECS::Service
+    DependsOn: ALBListener
+    Properties:
+      ServiceName: compliant-web-service
+      Cluster: !Ref ECSCluster
+      TaskDefinition: !Ref WebServiceTaskDefinition
+      DesiredCount: 2
+      LaunchType: FARGATE
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          # DISABLED for security (no public IPs)
+          AssignPublicIp: DISABLED
+          Subnets:
+            - !Ref PrivateSubnet1
+            - !Ref PrivateSubnet2
+          SecurityGroups:
+            - !Ref ECSSecurityGroup
+      LoadBalancers:
+        - ContainerName: web-app
+          ContainerPort: 8080
+          TargetGroupArn: !Ref TargetGroup
+      DeploymentConfiguration:
+        MaximumPercent: 200
+        MinimumHealthyPercent: 100
+      Tags:
+        - Key: Name
+          Value: web-service
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Application
+          Value: web-service
+        - Key: CostCenter
+          Value: engineering
+
+  # Application Load Balancer
+  ApplicationLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: compliant-alb
+      Type: application
+      Scheme: internet-facing
+      Subnets:
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+      SecurityGroups:
+        - !Ref ALBSecurityGroup
+      Tags:
+        - Key: Name
+          Value: compliant-alb
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Application
+          Value: web-service
+        - Key: CostCenter
+          Value: engineering
+
+  # Target Group
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: web-service-tg
+      Port: 8080
+      Protocol: HTTP
+      TargetType: ip
+      VpcId: !Ref ServiceVPC
+      HealthCheckEnabled: true
+      HealthCheckProtocol: HTTP
+      HealthCheckPath: /health
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      Tags:
+        - Key: Name
+          Value: web-service-tg
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Application
+          Value: web-service
+        - Key: CostCenter
+          Value: engineering
+
+  # ALB Listener
+  ALBListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref ApplicationLoadBalancer
+      Port: 443
+      Protocol: HTTPS
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+
+Outputs:
+  ClusterName:
+    Description: ECS Cluster Name
+    Value: !Ref ECSCluster
+  ServiceName:
+    Description: ECS Service Name
+    Value: !GetAtt WebService.Name
+  LoadBalancerURL:
+    Description: The URL of the load balancer
+    Value: !GetAtt ApplicationLoadBalancer.DNSName
