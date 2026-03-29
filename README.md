@@ -11,12 +11,11 @@ This repository enforces 13 security policies for ECS deployments via OPA/Rego. 
 ```
 ├── opa-policies/                    # OPA security policies
 │   └── ecs_security_policy.rego     # 13 security rules for ECS
-├── cloudformation-templates/        # Sample CloudFormation templates
+├── cloudformation-templates/        # CloudFormation templates to validate
 │   ├── ecs-compliant.yaml          # Example: passes all policies
 │   └── ecs-non-compliant.yaml      # Example: violates policies
 └── .github/workflows/
-    ├── test-compliant.yml          # Tests ecs-compliant.yaml (expects pass)
-    └── test-non-compliant.yml      # Tests ecs-non-compliant.yaml (expects fail)
+    └── validate-templates.yml       # Single unified PR validation workflow
 ```
 
 ## Security Policies Enforced
@@ -47,30 +46,57 @@ This repository enforces 13 security policies for ECS deployments via OPA/Rego. 
    chmod +x opa
    ```
 
-2. **Run Policy Check:**
+2. **Validate a Template:**
    ```bash
-   ./opa eval -d opa-policies/ -i cloudformation-templates/ecs-compliant.yaml data
+   ./opa eval -d opa-policies/ -i cloudformation-templates/your-template.yaml "data.ecs_security"
    ```
 
-## CI/CD Workflows
+3. **View Violations:**
+   ```bash
+   ./opa eval -d opa-policies/ -i cloudformation-templates/your-template.yaml "data.ecs_security" | jq '.result[0].expressions[0].value.deny'
+   ```
 
-Two automated workflows validate templates:
+## CI/CD Workflow
 
-**1. Compliant Template Test** ([test-compliant.yml](.github/workflows/test-compliant.yml))
-- Validates `ecs-compliant.yaml`
-- Expected: ✅ PASS (no violations)
-- Triggers on changes to compliant template or policies
+**Unified PR Validation** ([validate-templates.yml](.github/workflows/validate-templates.yml))
 
-**2. Non-Compliant Template Test** ([test-non-compliant.yml](.github/workflows/test-non-compliant.yml))
-- Validates `ecs-non-compliant.yaml`
-- Expected: ❌ FAIL (policy violations detected)
-- Triggers on changes to non-compliant template or policies
-- Proves policies correctly identify violations
+Runs automatically on every pull request that modifies CloudFormation templates:
 
-Both workflows:
-- Run on PR and push to main
-- Use OPA to validate policies
-- Show clear pass/fail results
+- **Triggers:** PR events with changes to `cloudformation-templates/`, `opa-policies/`, or workflow file
+- **Validation:** Scans all YAML files in `cloudformation-templates/` directory
+- **Output:** Posts detailed PR comment with results
+- **Blocking:** 
+  - ✅ **Pass** - No violations detected → PR can be merged
+  - ❌ **Block** - Violations found → PR is blocked with violation details listed in comment
+
+### PR Comment Examples
+
+**Passing PR:**
+```
+✅ Validation Passed - All templates are compliant!
+```
+
+**Failing PR:**
+```
+❌ FAILED - Found 12 violations
+
+❌ ecs-non-compliant.yaml (12 violations)
+- VIOLATION: ECS Service 'NonCompliantService' has AssignPublicIp enabled...
+- VIOLATION: TaskDefinition 'NonCompliantTaskDefinition' uses host network mode...
+- [... more violations ...]
+```
+
+## Workflow Behavior
+
+1. **On PR Creation/Update:** Workflow runs automatically
+2. **Validation:** OPA evaluates all CF templates against 13 security policies
+3. **Comment Posted:** GitHub PR gets automated comment with:
+   - Per-template pass/fail status
+   - Full violation details (if any)
+   - Policy violation explanations
+4. **PR Blocking:**
+   - No violations → ✅ Workflow passes, PR can merge
+   - Violations found → ❌ Workflow fails, PR must be fixed before merging
 
 ## Examples
 
