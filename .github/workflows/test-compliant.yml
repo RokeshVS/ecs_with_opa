@@ -1,4 +1,4 @@
-name: Test Compliant Template
+name: Test Compliant Template 
 
 on:
   pull_request:
