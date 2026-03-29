@@ -7,6 +7,10 @@ on:
       - 'opa-policies/**'
       - '.github/workflows/validate-templates.yml'
 
+permissions:
+  contents: read
+  pull-requests: write
+
 jobs:
   validate:
     runs-on: ubuntu-latest
@@ -40,8 +44,8 @@ jobs:
           
           echo "TEMPLATES_FOUND=true" >> $GITHUB_OUTPUT
           
-          # Initialize results file
-          > /tmp/validation_results.json
+          # Initialize results as JSON array
+          echo "[]" > /tmp/validation_results.json
           
           total_violations=0
           all_passed=true
@@ -56,23 +60,22 @@ jobs:
             ./opa eval -d opa-policies/ -i "$template" "data.ecs_security" > /tmp/opa-result.json 2>&1
             
             # Extract results
-            violations=$(jq -r '.result[0].expressions[0].value.deny[]' /tmp/opa-result.json 2>/dev/null || echo "")
             violation_count=$(jq '.result[0].expressions[0].value.deny | length' /tmp/opa-result.json 2>/dev/null || echo "0")
+            violations=$(jq -c '.result[0].expressions[0].value.deny' /tmp/opa-result.json 2>/dev/null || echo "[]")
             
-            # Store template result
-            jq -n \
+            # Append to results array
+            jq \
               --arg template "$template" \
-              --arg count "$violation_count" \
-              --argjson violations "$(jq '.result[0].expressions[0].value.deny' /tmp/opa-result.json 2>/dev/null || echo '[]')" \
-              '{template: $template, violation_count: ($count | tonumber), violations: $violations}' \
-              >> /tmp/validation_results.json
+              --argjson count "$violation_count" \
+              --argjson violations "$violations" \
+              '. += [{"template": $template, "violation_count": $count, "violations": $violations}]' \
+              /tmp/validation_results.json > /tmp/validation_results.tmp && mv /tmp/validation_results.tmp /tmp/validation_results.json
             
             if [ "$violation_count" -eq 0 ]; then
               echo "✅ PASSED: No security violations"
             else
               echo "❌ FAILED: Found $violation_count violation(s)"
-              violations_text=$(echo "$violations" | sed 's/^/  - /')
-              echo "$violations_text"
+              echo "$violations" | jq -r '.[]' | sed 's/^/  - /'
               all_passed=false
               total_violations=$((total_violations + violation_count))
             fi
@@ -99,7 +102,6 @@ jobs:
         with:
           script: |
             const fs = require('fs');
-            const path = require('path');
             
             let comment = '## 🔍 OPA Policy Validation Report\n\n';
             
@@ -108,26 +110,23 @@ jobs:
               if (!fs.existsSync(resultsFile)) {
                 comment += '❌ No templates found to validate\n';
               } else {
-                const lines = fs.readFileSync(resultsFile, 'utf8')
-                  .split('\n')
-                  .filter(line => line.trim());
+                const results = JSON.parse(fs.readFileSync(resultsFile, 'utf8'));
                 
-                if (lines.length === 0) {
+                if (!results || results.length === 0) {
                   comment += '✅ **Validation Passed** - All templates are compliant!\n';
                 } else {
                   let hasViolations = false;
                   
-                  lines.forEach((line, index) => {
-                    const result = JSON.parse(line);
+                  results.forEach(result => {
                     const template = result.template;
-                    const violations = result.violations;
+                    const violations = result.violations || [];
                     const count = result.violation_count;
                     
                     if (count === 0) {
-                      comment += `✅ **${template}** - PASSED\n`;
+                      comment += `✅ **${template}** - PASSED\n\n`;
                     } else {
                       hasViolations = true;
-                      comment += `\n❌ **${template}** - FAILED (${count} violation${count > 1 ? 's' : ''})\n\n`;
+                      comment += `❌ **${template}** - FAILED (${count} violation${count > 1 ? 's' : ''})\n\n`;
                       comment += '**Violations:**\n';
                       violations.forEach(violation => {
                         comment += `- ${violation}\n`;
