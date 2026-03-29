@@ -31,11 +31,36 @@ jobs:
           echo "Testing: ecs-compliant.yaml"
           echo "Expected: PASS (no violations)"
           echo "=================================================="
+          echo ""
           
-          if ./opa eval -d opa-policies/ -i cloudformation-templates/ecs-compliant.yaml data; then
+          # Run OPA evaluation and capture output
+          OUTPUT=$(./opa eval -d opa-policies/ -i cloudformation-templates/ecs-compliant.yaml "data.ecs_security" 2>&1)
+          EXIT_CODE=$?
+          
+          echo "OPA Evaluation Output:"
+          echo "--------------------"
+          echo "$OUTPUT"
+          echo "--------------------"
+          echo ""
+          
+          # Check for violations
+          if echo "$OUTPUT" | grep -q '"deny"'; then
+            VIOLATIONS=$(echo "$OUTPUT" | grep -oP '"deny".*' | head -20)
+            echo "❌ FAILED: Found policy violations:"
+            echo "$VIOLATIONS"
+            echo ""
+            exit 1
+          fi
+          
+          # Check if allow is true
+          if echo "$OUTPUT" | grep -q '"allow":true'; then
             echo "✅ PASSED: ecs-compliant.yaml passed all policies"
+            echo "  - No policy violations detected"
+            echo "  - All security requirements met"
             exit 0
           else
-            echo "❌ FAILED: ecs-compliant.yaml should pass but has violations"
+            echo "❌ FAILED: ecs-compliant.yaml should pass but has issues"
+            echo "Full output:"
+            echo "$OUTPUT"
             exit 1
           fi
