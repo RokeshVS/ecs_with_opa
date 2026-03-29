@@ -33,42 +33,23 @@ jobs:
           echo "=================================================="
           echo ""
           
-          # Check if file exists
-          if [ ! -f "cloudformation-templates/ecs-compliant.yaml" ]; then
-            echo "❌ ERROR: File not found - cloudformation-templates/ecs-compliant.yaml"
-            exit 1
-          fi
+          # Run OPA evaluation
+          ./opa eval -d opa-policies/ -i cloudformation-templates/ecs-compliant.yaml "data.ecs_security" > /tmp/opa-result.txt 2>&1
           
-          echo "Running OPA evaluation..."
+          echo "Policy Validation Report:"
+          echo "---"
+          cat /tmp/opa-result.txt
+          echo ""
+          echo "---"
           echo ""
           
-          # Run OPA evaluation and capture both output and error
-          if ./opa eval -d opa-policies/ -i cloudformation-templates/ecs-compliant.yaml "data.ecs_security" 2>&1 | tee /tmp/opa-output.txt; then
-            echo ""
-            echo "OPA Command executed successfully"
-            echo ""
-            
-            # Extract violations
-            if grep -q '"deny":\s*\[\s*\]' /tmp/opa-output.txt; then
-              echo "✅ PASSED: ecs-compliant.yaml passed all policies"
-              echo "  - No policy violations detected"
-              echo "  - All security requirements met"
-              exit 0
-            else
-              VIOLATIONS=$(grep -oP '"deny":\s*\[.*?\]' /tmp/opa-output.txt 2>/dev/null || echo "")
-              if [ ! -z "$VIOLATIONS" ]; then
-                echo "❌ FAILED: Found policy violations:"
-                echo "$VIOLATIONS"
-                exit 1
-              else
-                echo "✅ PASSED: ecs-compliant.yaml passed all policies"
-                exit 0
-              fi
-            fi
-          else
-            echo "❌ ERROR: OPA evaluation failed"
-            echo ""
-            echo "Output:"
-            cat /tmp/opa-output.txt 2>/dev/null || echo "No output captured"
+          # Check if there are violations
+          if grep -q 'deny.*\[' /tmp/opa-result.txt && ! grep -q 'deny.*\[\]' /tmp/opa-result.txt; then
+            echo "❌ FAILED: Template has policy violations"
             exit 1
+          else
+            echo "✅ PASSED: ecs-compliant.yaml passed all policies"
+            echo "  - No policy violations detected"
+            echo "  - All security requirements met"
+            exit 0
           fi

@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: 'Non-Compliant ECS Service - For Testing OPA Policies '
+Description: 'Non-Compliant ECS Service - For Testing OPA Policies'
 
 Resources:
   # VPC
