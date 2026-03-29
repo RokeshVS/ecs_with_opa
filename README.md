@@ -15,7 +15,8 @@ This repository enforces 13 security policies for ECS deployments via OPA/Rego. 
 │   ├── ecs-compliant.yaml          # Example: passes all policies
 │   └── ecs-non-compliant.yaml      # Example: violates policies
 └── .github/workflows/
-    └── opa-check.yml               # CI/CD workflow (auto-runs on PR)
+    ├── test-compliant.yml          # Tests ecs-compliant.yaml (expects pass)
+    └── test-non-compliant.yml      # Tests ecs-non-compliant.yaml (expects fail)
 ```
 
 ## Security Policies Enforced
@@ -51,12 +52,25 @@ This repository enforces 13 security policies for ECS deployments via OPA/Rego. 
    ./opa eval -d opa-policies/ -i cloudformation-templates/ecs-compliant.yaml data
    ```
 
-### CI/CD Validation
+## CI/CD Workflows
 
-Push or create a PR with CloudFormation changes. The workflow automatically:
-1. Runs OPA policy validation on YAML templates
-2. Blocks merge if violations found
-3. Shows ✅/❌ results
+Two automated workflows validate templates:
+
+**1. Compliant Template Test** ([test-compliant.yml](.github/workflows/test-compliant.yml))
+- Validates `ecs-compliant.yaml`
+- Expected: ✅ PASS (no violations)
+- Triggers on changes to compliant template or policies
+
+**2. Non-Compliant Template Test** ([test-non-compliant.yml](.github/workflows/test-non-compliant.yml))
+- Validates `ecs-non-compliant.yaml`
+- Expected: ❌ FAIL (policy violations detected)
+- Triggers on changes to non-compliant template or policies
+- Proves policies correctly identify violations
+
+Both workflows:
+- Run on PR and push to main
+- Use OPA to validate policies
+- Show clear pass/fail results
 
 ## Examples
 

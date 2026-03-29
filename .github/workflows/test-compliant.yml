@@ -1,0 +1,41 @@
+name: Test Compliant Template
+
+on:
+  pull_request:
+    paths:
+      - 'cloudformation-templates/ecs-compliant.yaml'
+      - 'opa-policies/**'
+  push:
+    branches:
+      - main
+    paths:
+      - 'cloudformation-templates/ecs-compliant.yaml'
+
+jobs:
+  test-compliant:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Install OPA
+        run: |
+          curl -L -o opa https://openpolicyagent.org/downloads/latest/opa_linux_amd64
+          chmod +x opa
+          ./opa version
+      
+      - name: Validate Compliant Template
+        run: |
+          echo "=================================================="
+          echo "Testing: ecs-compliant.yaml"
+          echo "Expected: PASS (no violations)"
+          echo "=================================================="
+          
+          if ./opa eval -d opa-policies/ -i cloudformation-templates/ecs-compliant.yaml data; then
+            echo "✅ PASSED: ecs-compliant.yaml passed all policies"
+            exit 0
+          else
+            echo "❌ FAILED: ecs-compliant.yaml should pass but has violations"
+            exit 1
+          fi
