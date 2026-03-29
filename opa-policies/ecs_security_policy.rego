@@ -107,13 +107,19 @@ deny contains msg if {
 # ============================================================================
 # VIOLATION 8: Instance Type Restrictions
 # ============================================================================
-# Block oversized instance types that are too expensive for typical workloads
+# Block oversized instance types larger than 8xlarge (9xlarge, 10xlarge, etc.)
+# Allows instances up to 8xlarge to control costs
 deny contains msg if {
     instance := input.Resources[name]
     instance.Type == "AWS::EC2::Instance"
-    blocked_types := ["r7g.16xlarge", "r6i.16xlarge", "m6i.16xlarge", "c6i.16xlarge", "x2gd.16xlarge"]
-    instance.Properties.InstanceType == blocked_types[_]
-    msg := sprintf("VIOLATION: EC2 Instance '%s' uses oversized instance type '%s'. Use appropriately-sized instances to control costs", [name, instance.Properties.InstanceType])
+    instance_type := instance.Properties.InstanceType
+    # Extract size part (after the dot, e.g., "16xlarge" from "r7g.16xlarge")
+    parts := split(instance_type, ".")
+    size_part := parts[1]
+    # Block large sizes: 9xlarge, 10xlarge, 12xlarge, 16xlarge, 24xlarge, or metal
+    # Pattern matches: 9xlarge or any 2+ digit number followed by xlarge (10-99), or metal
+    regex.match("^([9]|[1-9][0-9])xlarge$|^metal$", size_part)
+    msg := sprintf("VIOLATION: EC2 Instance '%s' uses oversized instance type '%s' (larger than 8xlarge). Cost optimization: use instance size 8xlarge or smaller", [name, instance_type])
 }
 
 # ============================================================================
