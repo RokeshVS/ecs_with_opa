@@ -124,6 +124,10 @@ Resources:
       Tags:
         - Key: Environment
           Value: !Ref Environment
+        - Key: Application
+          Value: web-service
+        - Key: CostCenter
+          Value: engineering
 
   # IAM Role for Task (application permissions)
   ECSTaskRole:
@@ -152,6 +156,10 @@ Resources:
       Tags:
         - Key: Environment
           Value: !Ref Environment
+        - Key: Application
+          Value: web-service
+        - Key: CostCenter
+          Value: engineering
 
   # ECS Cluster
   ECSCluster:
