@@ -1,0 +1,160 @@
+name: Validate CloudFormation Templates
+
+on:
+  pull_request:
+    paths:
+      - 'cloudformation-templates/**'
+      - 'opa-policies/**'
+      - '.github/workflows/validate-templates.yml'
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Install OPA
+        run: |
+          curl -L -o opa https://openpolicyagent.org/downloads/latest/opa_linux_amd64
+          chmod +x opa
+          ./opa version
+      
+      - name: Find and Validate CloudFormation Templates
+        id: validate
+        run: |
+          #!/bin/bash
+          set -e
+          
+          echo "🔍 Scanning for CloudFormation templates..."
+          
+          # Find all YAML files in cloudformation-templates
+          templates=$(find cloudformation-templates -name "*.yaml" -o -name "*.yml" 2>/dev/null | sort)
+          
+          if [ -z "$templates" ]; then
+            echo "No CloudFormation templates found"
+            echo "TEMPLATES_FOUND=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          echo "TEMPLATES_FOUND=true" >> $GITHUB_OUTPUT
+          
+          # Initialize results file
+          > /tmp/validation_results.json
+          
+          total_violations=0
+          all_passed=true
+          
+          for template in $templates; do
+            echo ""
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "Validating: $template"
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            
+            # Run OPA evaluation
+            ./opa eval -d opa-policies/ -i "$template" "data.ecs_security" > /tmp/opa-result.json 2>&1
+            
+            # Extract results
+            violations=$(jq -r '.result[0].expressions[0].value.deny[]' /tmp/opa-result.json 2>/dev/null || echo "")
+            violation_count=$(jq '.result[0].expressions[0].value.deny | length' /tmp/opa-result.json 2>/dev/null || echo "0")
+            
+            # Store template result
+            jq -n \
+              --arg template "$template" \
+              --arg count "$violation_count" \
+              --argjson violations "$(jq '.result[0].expressions[0].value.deny' /tmp/opa-result.json 2>/dev/null || echo '[]')" \
+              '{template: $template, violation_count: ($count | tonumber), violations: $violations}' \
+              >> /tmp/validation_results.json
+            
+            if [ "$violation_count" -eq 0 ]; then
+              echo "✅ PASSED: No security violations"
+            else
+              echo "❌ FAILED: Found $violation_count violation(s)"
+              violations_text=$(echo "$violations" | sed 's/^/  - /')
+              echo "$violations_text"
+              all_passed=false
+              total_violations=$((total_violations + violation_count))
+            fi
+          done
+          
+          echo ""
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "Validation Summary"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          
+          if [ "$all_passed" = true ]; then
+            echo "✅ All templates passed validation"
+            echo "VALIDATION_STATUS=passed" >> $GITHUB_OUTPUT
+            exit 0
+          else
+            echo "❌ Found $total_violations total violation(s)"
+            echo "VALIDATION_STATUS=failed" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+      
+      - name: Post PR Comment
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            
+            let comment = '## 🔍 OPA Policy Validation Report\n\n';
+            
+            try {
+              const resultsFile = '/tmp/validation_results.json';
+              if (!fs.existsSync(resultsFile)) {
+                comment += '❌ No templates found to validate\n';
+              } else {
+                const lines = fs.readFileSync(resultsFile, 'utf8')
+                  .split('\n')
+                  .filter(line => line.trim());
+                
+                if (lines.length === 0) {
+                  comment += '✅ **Validation Passed** - All templates are compliant!\n';
+                } else {
+                  let hasViolations = false;
+                  
+                  lines.forEach((line, index) => {
+                    const result = JSON.parse(line);
+                    const template = result.template;
+                    const violations = result.violations;
+                    const count = result.violation_count;
+                    
+                    if (count === 0) {
+                      comment += `✅ **${template}** - PASSED\n`;
+                    } else {
+                      hasViolations = true;
+                      comment += `\n❌ **${template}** - FAILED (${count} violation${count > 1 ? 's' : ''})\n\n`;
+                      comment += '**Violations:**\n';
+                      violations.forEach(violation => {
+                        comment += `- ${violation}\n`;
+                      });
+                      comment += '\n';
+                    }
+                  });
+                  
+                  if (!hasViolations) {
+                    comment = '## 🔍 OPA Policy Validation Report\n\n✅ **Validation Passed** - All templates are compliant!\n';
+                  }
+                }
+              }
+            } catch (error) {
+              comment += `⚠️ Error parsing validation results: ${error.message}\n`;
+            }
+            
+            // Post comment on PR
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: comment
+            });
+    
+      - name: Block PR on Violations
+        if: failure()
+        run: |
+          echo "❌ PR blocked: CloudFormation templates have policy violations"
+          exit 1
